@@ -1,10 +1,12 @@
 import time
-from tqdm import tqdm
+
 import torch
+from tqdm import tqdm
+
 
 def measure_ppl(samples, model, tokenizer):
     device = model.device
-    ppl = 0.
+    ppl = 0.0
     start_time = time.time()
     for prompt in tqdm(samples):
         input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
@@ -19,6 +21,6 @@ def measure_ppl(samples, model, tokenizer):
     mean_ppl = ppl / len(samples)
     mean_time = (end_time - start_time) / len(samples)
     print()
-    print(f'Perplexity: {mean_ppl:.4f}')
-    print(f'Mean time per sample: {mean_time:.3f} s')
+    print(f"Perplexity: {mean_ppl:.4f}")
+    print(f"Mean time per sample: {mean_time:.3f} s")
     return mean_ppl.item(), mean_time

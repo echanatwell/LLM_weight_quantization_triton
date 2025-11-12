@@ -115,16 +115,17 @@ def _matmul_int4_bf16(x_ptr, w_ptr,
     mask_out = (off_m[:, None] < B) & (off_n[None, :] < OUT)
     tl.store(out_ptr + out_off, out, mask=mask_out)
 
+
 class GlobalQuantLinearTriton(nn.Module):
     def __init__(self, l):
         super(GlobalQuantLinearTriton, self).__init__()
 
         OUT, IN = l.weight.size()
-        n_elements = IN*OUT
+        n_elements = IN * OUT
         weight_quant = torch.empty((OUT, IN // 2), dtype=torch.int8, device=l.weight.device)
         self.scale = 1 / l.weight.abs().max()
-        
-        BLOCK_SIZE = 512 
+
+        BLOCK_SIZE = 512
         grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
         _quantize_global[grid](l.weight, self.scale, weight_quant, n_elements, BLOCK_SIZE)
 
@@ -133,22 +134,30 @@ class GlobalQuantLinearTriton(nn.Module):
     def forward(self, x):
         B, L, IN = x.size()
         OUT, _ = self.weight.size()
-        x_flatten = x.view(B*L, IN).contiguous()
+        x_flatten = x.view(B * L, IN).contiguous()
         BLOCK_M = 128
         BLOCK_N = 128
         BLOCK_K = 64
         GROUP_M = 8
 
-        grid = (triton.cdiv(B*L, BLOCK_M)*triton.cdiv(OUT, BLOCK_N),) 
-        out = torch.empty((B*L, OUT), dtype=x.dtype, device=x.device)
+        grid = (triton.cdiv(B * L, BLOCK_M) * triton.cdiv(OUT, BLOCK_N),)
+        out = torch.empty((B * L, OUT), dtype=x.dtype, device=x.device)
 
-        _matmul_int4_bf16[grid](x_flatten, self.weight, 
-                               self.scale,
-                               out, 
-                               B*L, IN, OUT,
-                               BLOCK_M, BLOCK_N, BLOCK_K, GROUP_M,
-                               PER_CHANNEL=(self.scale.numel() > 1))
-        
+        _matmul_int4_bf16[grid](
+            x_flatten,
+            self.weight,
+            self.scale,
+            out,
+            B * L,
+            IN,
+            OUT,
+            BLOCK_M,
+            BLOCK_N,
+            BLOCK_K,
+            GROUP_M,
+            PER_CHANNEL=(self.scale.numel() > 1),
+        )
+
         out = out.view(B, L, OUT).contiguous()
-        
+
         return out
