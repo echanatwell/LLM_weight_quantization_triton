@@ -26,11 +26,20 @@ def _quantize_global(w_ptr, scale_ptr, out_ptr, n_elements, BLOCK_SIZE: tl.const
 
     packed = (w_quant_odd << 4) | w_quant_even
 
-    off_out = pid*BLOCK_SIZE + tl.arange(0, BLOCK_SIZE // 2)
-    mask_out = off_out < n_elements
+    off_out = pid*(BLOCK_SIZE // 2) + tl.arange(0, BLOCK_SIZE // 2)
+    mask_out = off_out < n_elements // 2
     tl.store(out_ptr + off_out, packed.to(tl.int8), mask=mask_out)
 
 
+# @triton.autotune(
+#     configs=[
+#         triton.Config({"BLOCK_M": 64, "BLOCK_N": 64, "BLOCK_K": 64, "GROUP_M": 8}),
+#         triton.Config({"BLOCK_M": 64,  "BLOCK_N": 128, "BLOCK_K": 64, "GROUP_M": 8}),
+#         triton.Config({"BLOCK_M": 128, "BLOCK_N": 64,  "BLOCK_K": 64, "GROUP_M": 8}),
+        
+#     ],
+#     key=["B", "IN", "OUT"],
+# )
 @triton.jit
 def _matmul_int4_bf16(x_ptr, w_ptr, 
                      w_scale_ptr, out_ptr, 
@@ -53,7 +62,7 @@ def _matmul_int4_bf16(x_ptr, w_ptr,
     off_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     off_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
 
-    acc = tl.zeros((BLOCK_M, BLOCK_M), dtype=tl.float32)
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
 
     for start in range(0, tl.cdiv(IN, BLOCK_K)):
         off_k = tl.arange(0, BLOCK_K // 2)
@@ -85,22 +94,23 @@ def _matmul_int4_bf16(x_ptr, w_ptr,
         w_even = tl.where(mask_w, w_even - 8, 0.)
         w_odd = tl.where(mask_w, w_odd - 8, 0.)
 
-        # scaling
-        if PER_CHANNEL: # TODO Test per_channel scale with rowwise quant
-            mask_scale = off_n < OUT
-            w_scale = tl.load(w_scale_ptr + off_n, mask=mask_scale)
-        else:
-            w_scale = tl.load(w_scale_ptr)
+        w = tl.interleave(w_even, w_odd)
+        w = tl.trans(w)
 
-        w_even_f = w_even.to(tl.float32) * w_scale[:, None]
-        w_odd_f = w_odd.to(tl.float32) * w_scale[:, None]
+        acc += tl.dot(x, w, out_dtype=tl.float32)
 
-        w_f = tl.interleave(w_even_f, w_odd_f)
-        w_f = tl.trans(w_f)
+    # scaling
+    if PER_CHANNEL: # TODO Test per_channel scale with rowwise quant
+        mask_scale = off_n < OUT
+        w_scale = tl.load(w_scale_ptr + off_n, mask=mask_scale)
+    else:
+        w_scale = tl.load(w_scale_ptr)
 
-        acc += tl.dot(x, w_f, out_dtype=tl.float32)
-    
+    # w_even_f = w_even.to(tl.float32) * w_scale[:, None]
+    # w_odd_f = w_odd.to(tl.float32) * w_scale[:, None]
+    acc = acc * w_scale[None, :]
     out = acc.to(tl.float32)
+    
     out_off = off_m[:, None]*OUT + off_n[None, :]
     mask_out = (off_m[:, None] < B) & (off_n[None, :] < OUT)
     tl.store(out_ptr + out_off, out, mask=mask_out)
