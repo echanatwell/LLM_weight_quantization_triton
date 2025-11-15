@@ -1,2 +1,3 @@
 from .DummyLinear import DummyLinear
 from .GlobalQuantLinearPytorch import QuantizedLinearGlobalTorch
+from .RowwiseQuantLinerarPytorch import QuantizedLinearRowwiseTorch
