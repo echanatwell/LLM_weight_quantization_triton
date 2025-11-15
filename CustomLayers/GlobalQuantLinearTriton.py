@@ -165,7 +165,7 @@ class GlobalQuantLinearTriton(nn.Module):
             OUT,
             BLOCK_M, BLOCK_N, BLOCK_K, GROUP_M,
             num_warps=2,
-            num_stages=2
+            num_stages=2,
             PER_CHANNEL=(self.scale.numel() > 1),
         )
 
