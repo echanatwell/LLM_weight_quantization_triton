@@ -33,10 +33,23 @@ def _quantize_global(w_ptr, scale_ptr, out_ptr, n_elements, BLOCK_SIZE: tl.const
 
 # @triton.autotune(
 #     configs=[
-#         triton.Config({"BLOCK_M": 64, "BLOCK_N": 64, "BLOCK_K": 64, "GROUP_M": 8}),
-#         triton.Config({"BLOCK_M": 64,  "BLOCK_N": 128, "BLOCK_K": 64, "GROUP_M": 8}),
-#         triton.Config({"BLOCK_M": 128, "BLOCK_N": 64,  "BLOCK_K": 64, "GROUP_M": 8}),
-        
+#         # triton.Config({'BLOCK_M': 32,  'BLOCK_N': 32,  'BLOCK_K': 64,  'GROUP_M': 1}, num_warps=2),
+#         triton.Config({'BLOCK_M': 32,  'BLOCK_N': 64,  'BLOCK_K': 64,  'GROUP_M': 1}, num_warps=2),
+#         # triton.Config({'BLOCK_M': 64,  'BLOCK_N': 32,  'BLOCK_K': 64,  'GROUP_M': 1}, num_warps=2),
+
+#         triton.Config({'BLOCK_M': 32,  'BLOCK_N': 32,  'BLOCK_K': 64,  'GROUP_M': 4}, num_warps=2),
+#         triton.Config({'BLOCK_M': 32,  'BLOCK_N': 64,  'BLOCK_K': 64,  'GROUP_M': 4}, num_warps=2),
+#         # triton.Config({'BLOCK_M': 64,  'BLOCK_N': 32,  'BLOCK_K': 64,  'GROUP_M': 4}, num_warps=2),
+
+#         # triton.Config({"BLOCK_M": 64, "BLOCK_N": 64, "BLOCK_K": 64, "GROUP_M": 8}, num_warps=4, num_stages=2),
+#         # triton.Config({"BLOCK_M": 64, "BLOCK_N": 64, "BLOCK_K": 64, "GROUP_M": 8}, num_warps=4, num_stages=3),
+#         # triton.Config({"BLOCK_M": 64, "BLOCK_N": 64, "BLOCK_K": 128, "GROUP_M": 8}, num_warps=4, num_stages=2),
+
+#         # triton.Config({'BLOCK_M': 128,  'BLOCK_N': 64,  'BLOCK_K': 64,  'GROUP_M': 4}, num_warps=4),
+#         # triton.Config({'BLOCK_M': 64,  'BLOCK_N': 128,  'BLOCK_K': 64,  'GROUP_M': 4}, num_warps=4),
+#         # triton.Config({'BLOCK_M': 128,  'BLOCK_N': 128,  'BLOCK_K': 64,  'GROUP_M': 4}, num_warps=8),
+
+#         # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32,  'BLOCK_K': 256, 'GROUP_M': 4}, num_warps=8),
 #     ],
 #     key=["B", "IN", "OUT"],
 # )
@@ -76,9 +89,9 @@ def _matmul_int4_bf16(x_ptr, w_ptr,
         x_off_odd = x_off + 1
         mask_x_odd = (off_m[:, None] < B) & ((off_k[None, :] + start*(BLOCK_K // 2)) * 2 + 1 < IN)
         x_odd = tl.load(x_ptr + x_off_odd, mask=mask_x_odd)
-
+        
         x = tl.interleave(x_even, x_odd)
-
+        
         # load w
         w_off = off_n[:, None]*(IN // 2) + (off_k[None, :] + start*(BLOCK_K // 2))
         mask_w = (off_n[:, None] < OUT) & (off_k[None, :] + start*(BLOCK_K // 2) < IN // 2)
@@ -87,7 +100,7 @@ def _matmul_int4_bf16(x_ptr, w_ptr,
         # unpacking
         w_even = w_packed & 0xF
         w_odd = (w_packed >> 4) & 0xF
-
+        
         # unsigned to signed
         # w_even = (w_even ^ 0x8) - 0x8
         # w_odd = (w_odd ^ 0x8) - 0x8
@@ -105,10 +118,9 @@ def _matmul_int4_bf16(x_ptr, w_ptr,
         w_scale = tl.load(w_scale_ptr + off_n, mask=mask_scale)
     else:
         w_scale = tl.load(w_scale_ptr)
-
-    # w_even_f = w_even.to(tl.float32) * w_scale[:, None]
-    # w_odd_f = w_odd.to(tl.float32) * w_scale[:, None]
-    acc = acc * w_scale[None, :]
+    
+    acc = acc / w_scale[None, :] / 7.
+    
     out = acc.to(tl.float32)
     
     out_off = off_m[:, None]*OUT + off_n[None, :]
@@ -135,12 +147,12 @@ class GlobalQuantLinearTriton(nn.Module):
         B, L, IN = x.size()
         OUT, _ = self.weight.size()
         x_flatten = x.view(B * L, IN).contiguous()
-        BLOCK_M = 128
-        BLOCK_N = 128
+        BLOCK_M = 32 #64
+        BLOCK_N = 32 #64
         BLOCK_K = 64
-        GROUP_M = 8
+        GROUP_M = 4 #8
 
-        grid = (triton.cdiv(B * L, BLOCK_M) * triton.cdiv(OUT, BLOCK_N),)
+        grid = lambda meta: (triton.cdiv(B * L, meta['BLOCK_M']) * triton.cdiv(OUT, meta['BLOCK_N']),)
         out = torch.empty((B * L, OUT), dtype=x.dtype, device=x.device)
 
         _matmul_int4_bf16[grid](
@@ -151,10 +163,9 @@ class GlobalQuantLinearTriton(nn.Module):
             B * L,
             IN,
             OUT,
-            BLOCK_M,
-            BLOCK_N,
-            BLOCK_K,
-            GROUP_M,
+            BLOCK_M, BLOCK_N, BLOCK_K, GROUP_M,
+            num_warps=2,
+            num_stages=2,
             PER_CHANNEL=(self.scale.numel() > 1),
         )
 
