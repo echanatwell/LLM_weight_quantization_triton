@@ -91,7 +91,7 @@ def _matmul_int4_bf16(x_ptr, w_ptr,
         x_odd = tl.load(x_ptr + x_off_odd, mask=mask_x_odd)
         
         x = tl.interleave(x_even, x_odd)
-        
+
         # load w
         w_off = off_n[:, None]*(IN // 2) + (off_k[None, :] + start*(BLOCK_K // 2))
         mask_w = (off_n[:, None] < OUT) & (off_k[None, :] + start*(BLOCK_K // 2) < IN // 2)
@@ -113,15 +113,15 @@ def _matmul_int4_bf16(x_ptr, w_ptr,
         acc += tl.dot(x, w, out_dtype=tl.float32)
 
     # scaling
-    if PER_CHANNEL: # TODO Test per_channel scale with rowwise quant
+    if PER_CHANNEL:
         mask_scale = off_n < OUT
         w_scale = tl.load(w_scale_ptr + off_n, mask=mask_scale)
     else:
         w_scale = tl.load(w_scale_ptr)
     
     acc = acc / w_scale[None, :] / 7.
-    
-    out = acc.to(tl.float32)
+
+    out = acc.to(tl.bfloat16) # acc.to(tl.float32)
     
     out_off = off_m[:, None]*OUT + off_n[None, :]
     mask_out = (off_m[:, None] < B) & (off_n[None, :] < OUT)

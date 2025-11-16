@@ -4,11 +4,13 @@ import torch.nn.functional as F
 
 
 class QuantizedLinearGlobalTorch(nn.Module):
-    def __init__(self, original_layer, device):
+    def __init__(self, original_layer):
         super().__init__()
         self.in_features = original_layer.in_features
         self.out_features = original_layer.out_features
 
+        device = original_layer.weight.device
+        
         weight = original_layer.weight.data
         if original_layer.bias is not None:
             self.bias = nn.Parameter(original_layer.bias.data.clone().to(device))

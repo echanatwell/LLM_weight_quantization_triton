@@ -4,10 +4,12 @@ import torch.nn.functional as F
 
 
 class QuantizedLinearRowwiseTorch(nn.Module):
-    def __init__(self, original_layer, device):
+    def __init__(self, original_layer):
         super().__init__()
         self.in_features = original_layer.in_features
         self.out_features = original_layer.out_features
+
+        device = original_layer.weight.device
 
         weight = original_layer.weight.data
         if original_layer.bias is not None:
@@ -22,6 +24,7 @@ class QuantizedLinearRowwiseTorch(nn.Module):
         row_scales = max_row_vals / 7.0  # m(R,1) -> m(R,1)
 
         quantized = torch.clamp(torch.round(weight / row_scales), -8, 7).to(torch.int8)
+
         packed = self.pack_int4(quantized)
 
         return (nn.Parameter(row_scales.to(device), requires_grad=False), 
@@ -52,7 +55,7 @@ class QuantizedLinearRowwiseTorch(nn.Module):
 
     def forward(self, x):
         unpacked_weight = self.unpack_int4(self.packed_weight)
+
         restored_weight = unpacked_weight * self.weight_row_scales
 
         return F.linear(x, restored_weight, self.bias)
-
