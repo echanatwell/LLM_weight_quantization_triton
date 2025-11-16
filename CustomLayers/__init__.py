@@ -5,3 +5,4 @@ from .RowwiseQuantLinearPytorch import QuantizedLinearRowwiseTorch
 
 from .GlobalQuantLinearTriton import GlobalQuantLinearTriton
 from .RowwiseQuantLinearTriton import RowwiseQuantLinearTriton
+
